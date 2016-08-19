@@ -3,11 +3,14 @@ import warnings
 warnings.filterwarnings('ignore')
 
 import pandas as pd
-pd.options.display.max_columns = 100
-from matplotlib import pyplot as plt
-import matplotlib
-matplotlib.style.use('ggplot')
 import numpy as np
+from sklearn.pipeline import make_pipeline
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_selection import SelectKBest
+from sklearn.cross_validation import StratifiedKFold
+from sklearn.grid_search import GridSearchCV
+from sklearn.ensemble.gradient_boosting import GradientBoostingClassifier
+from sklearn.cross_validation import cross_val_score
 
 pd.options.display.max_rows = 100
 
@@ -31,12 +34,13 @@ def get_combined_data():
     combined.reset_index(inplace=True)
     combined.drop('index',inplace=True,axis=1)
     
-    return combine
+    return combined
+
 	
 def get_titles():
 
+    #combined = get_combined_data()
     global combined
-    
     # we extract the title from each name
     combined['Title'] = combined['Name'].map(lambda name:name.split(',')[1].split('.')[0].strip())
     
@@ -66,8 +70,6 @@ def get_titles():
     # we map each title
     combined['Title'] = combined.Title.map(Title_Dictionary)
 	
-#grouped = combined.groupby(['Sex','Pclass','Title'])
-#grouped.median()
 
 def process_age():
 
@@ -247,3 +249,105 @@ def process_family():
     combined['LargeFamily'] = combined['FamilySize'].map(lambda s : 1 if 5<=s else 0)
     
     status('family')
+
+def scale_all_features():
+    
+    global combined
+    
+    features = list(combined.columns)
+    features.remove('PassengerId')
+    combined[features] = combined[features].apply(lambda x: x/x.max(), axis=0)
+    
+    print 'Features scaled successfully !'
+	
+def compute_score(clf, X, y,scoring='accuracy'):
+    xval = cross_val_score(clf, X, y, cv = 5,scoring=scoring)
+    return np.mean(xval)
+	
+def recover_train_test_target():
+    global combined
+    
+    train0 = pd.read_csv('data/train.csv')
+    
+    targets = train0.Survived
+    train = combined.ix[0:890]
+    test = combined.ix[891:]
+    
+    return train,test,targets
+	
+if __name__ == "__main__":
+	combined = get_combined_data()
+	get_titles()
+	process_age()
+	process_names()
+	process_fares()
+	process_embarked()
+	process_cabin()
+	process_sex()
+	process_pclass()
+	process_ticket()
+	process_family()
+	scale_all_features()
+	train,test,targets = recover_train_test_target()
+	from sklearn.ensemble import ExtraTreesClassifier
+	from sklearn.feature_selection import SelectFromModel
+	clf = ExtraTreesClassifier(n_estimators=200)
+	clf = clf.fit(train, targets)
+	features = pd.DataFrame()
+	features['feature'] = train.columns
+	features['importance'] = clf.feature_importances_
+	print features.sort(['importance'],ascending=False)
+	model = SelectFromModel(clf, prefit=True)
+	train_new = model.transform(train)
+	print train_new.shape
+	test_new = model.transform(test)
+	print test_new.shape
+	
+	#Random Forest
+
+	forest = RandomForestClassifier(max_features='auto',criterion='gini',warm_start=True)
+
+	parameter_grid = {
+                 'max_depth' : [4,5,6],
+                 'n_estimators': [240,245,250],
+				 'max_leaf_nodes':[50,60,70]
+                 }
+
+	"""
+	import xgboost as xgb
+	
+	boost= xgb.XGBClassifier(learning_rate =0.01,
+					n_estimators=5000,
+					gamma=0,
+					subsample=0.6,
+					colsample_bytree=0.6,
+					objective= 'binary:logistic',
+					scale_pos_weight=1,
+					max_depth=5,
+					reg_alpha=0.01,
+					min_child_weight=3
+					)
+
+	parameter_grid = {
+					'reg_alpha':[0.01]
+                 }
+	"""
+
+				 
+	cross_validation = StratifiedKFold(targets, n_folds=5)
+
+	grid_search = GridSearchCV(forest,
+                           param_grid=parameter_grid,
+                           cv=cross_validation)
+
+	grid_search.fit(train_new, targets)
+
+	print('Best score: {}'.format(grid_search.best_score_))
+	print('Best parameters: {}'.format(grid_search.best_params_))
+	output = grid_search.predict(test_new).astype(int)
+	df_output = pd.DataFrame()
+	df_output['PassengerId'] = test['PassengerId']
+	df_output['Survived'] = output
+	df_output[['PassengerId','Survived']].to_csv('data/output.csv',index=False)
+	
+	
